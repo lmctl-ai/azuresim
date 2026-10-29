@@ -51,7 +51,7 @@ command = ['mvn.cmd' if os.name == 'nt' else 'mvn', '-B', 'package', '-Dmaven.te
 if args.offline:
     command.append('-o')
 if args.native:
-    command += ['-Dnative', '-Dquarkus.native.native-image-xmx=6g']
+    command += ['-Dnative', '-Dquarkus.native.native-image-xmx=4g']
 subprocess.run(command, cwd=source, check=True)
 if args.native:
     suffix = '.exe' if os.name == 'nt' else ''

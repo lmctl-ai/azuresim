@@ -94,7 +94,9 @@ Cross-platform support remains provisional until those CI jobs pass.
 - **Build integration, not a fork mirror.** `upstream.lock.json` pins release
   0.15.0, commit `8b439a8ddf90df92315dfdbe95b0498e81384cc0`, and its source archive
   SHA-256. The build verifies the archive before extracting it and adds only our
-  small Quarkus entrypoint. Azure handlers and upstream native metadata stay intact.
+  small Quarkus entrypoint. Azure handlers and upstream native metadata stay intact. Windows adds runtime
+  initialization for docker-java's Unix DomainSocket class, whose libc symbols
+  cannot be resolved during a Windows native build.
 - **Source build instead of downloader.** This release of Floci-AZ publishes
   Docker images but no native release assets. Compiling it produces a standalone
   executable with no first-run download. Maven resolves the upstream dependency

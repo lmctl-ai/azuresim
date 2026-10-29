@@ -40,6 +40,12 @@ entry_source = (ROOT / 'src/main/java/ai/lmctl/azuresim/Main.java').read_text().
     '@VERSION@', (ROOT / 'VERSION').read_text().strip())
 if not entry.exists() or entry.read_text() != entry_source:
     entry.write_text(entry_source)
+# docker-java's Unix domain socket initializer resolves libc symbols, which do
+# not exist on Windows. Keep this unused transport out of Windows build-time init.
+if os.name == 'nt':
+    metadata = source / 'src/main/resources/META-INF/native-image/ai.lmctl/azuresim/native-image.properties'
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text('Args = --initialize-at-run-time=com.github.dockerjava.transport.DomainSocket\n')
 command = ['mvn.cmd' if os.name == 'nt' else 'mvn', '-B', 'package', '-Dmaven.test.skip=true',
            '-Dquarkus.package.main-class=ai.lmctl.azuresim.Main']
 if args.offline:

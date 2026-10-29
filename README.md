@@ -87,7 +87,8 @@ They launch the actual azuresim entrypoint, never an independently started upstr
 GitHub Actions builds and runs both suites on Linux x64/arm64, macOS x64/arm64,
 and Windows x64 on every main push and PR. A `v*` tag matching VERSION publishes
 the tested native binaries plus SHA256SUMS after all five jobs succeed.
-Cross-platform support remains provisional until those CI jobs pass.
+All five platforms passed native tests in [CI run 40975537919](https://github.com/lmctl-ai/azuresim/actions/runs/40975537919).
+See [validation evidence](docs/validation.md) for the exact commit and checks.
 
 ## Design and limits
 

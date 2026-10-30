@@ -33,9 +33,9 @@ with tempfile.TemporaryDirectory(prefix='azuresim-templates-') as tmp:
     execute(root, 'prepare', check=True)
     assert not (root/'auth.json').exists(), 'check mode had effects'
     execute(root, 'prepare')
-    config = json.loads((root/'auth.json').read_text())
+    config = json.loads((root/'auth.json').read_text(encoding='utf-8'))
     assert config['accounts'][ACCOUNT] == KEY
-    payload = json.loads((root/'blob.json').read_text())
+    payload = json.loads((root/'blob.json').read_text(encoding='utf-8'))
     assert payload['count'] == 3 and payload['tags'] == ['template', '雪']
     assert '${opaque}' in payload['name'], 'inserted text was rescanned'
     for mode in ['open', 'enforce']:

@@ -6,6 +6,11 @@ run without Docker, Java, an Azure account, or network access at runtime.
 
 ## Quickstart
 
+Prebuilt executables and SHA256SUMS are available in the
+[v0.2.0 release](https://github.com/lmctl-ai/azuresim/releases/tag/v0.2.0).
+Choose your platform, verify its checksum, and run `azuresim serve`. For opt-in
+auth and a real SDK client example, see [storage auth](docs/auth.md).
+
 Build on a machine with **GraalVM 25**, Maven 3.9+, Python 3.12+, and a C toolchain:
 
 ```bash
@@ -95,8 +100,10 @@ after one fetch, `--offline` forbids downloads. Windows uses `target/lmazure.exe
 GitHub Actions builds and runs the CLI, storage, auth, and client integration suites on Linux x64/arm64, macOS x64/arm64,
 and Windows x64 on every main push and PR. A `v*` tag matching VERSION publishes
 the tested native binaries plus SHA256SUMS after all five jobs succeed.
-The previous 0.1.0 baseline passed all five platforms in [CI run 40975537919](https://github.com/lmctl-ai/azuresim/actions/runs/40975537919); the current workflow also requires auth and lmazure integration checks.
-See [validation evidence](docs/validation.md) for the exact commit and checks.
+[Version 0.2.0](https://github.com/lmctl-ai/azuresim/releases/tag/v0.2.0) passed all
+five platforms in [release CI run 40993291701](https://github.com/lmctl-ai/azuresim/actions/runs/40993291701):
+12 CLI, 21 storage, 42 auth/config, and 18 real lmazure SDK checks per platform.
+See [Wave 11 validation evidence](docs/validation-wave11.md) for exact commits and scope.
 
 ## Design and limits
 

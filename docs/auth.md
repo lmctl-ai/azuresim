@@ -18,7 +18,7 @@ The example contains public dummy credentials; do not use Azure production secre
 
 ## Authentication
 
-`accounts` maps a storage account name to a base64 HMAC key. SharedKey validation
+`accounts` maps a storage account name to a base64 HMAC key (at least 16 decoded bytes). SharedKey validation
 uses HMAC-SHA256, constant-time signature comparison, account binding, all eleven
 standard header fields, sorted lower-case `x-ms-*` headers, and the encoded URI
 path plus sorted decoded query names/values. An emulator path repeats the account

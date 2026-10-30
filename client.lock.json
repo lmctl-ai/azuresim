@@ -1,0 +1,12 @@
+{
+  "repository": "lmctl-ai/lmazure",
+  "version": "0.1.5",
+  "tag": "v0.1.5",
+  "sha256": {
+    "lmazure-linux-arm64": "4026b955cf653b3f517e0257149a0898df5421b072ad4a1e8a80d3692fbbe5b3",
+    "lmazure-linux-x64": "204fdde92efb2349eff0d7a45a49a45f54da935118f8e0c21cbdddd15da3239f",
+    "lmazure-macos-arm64": "24d4dc13b0ffc5d85d9f133ab94e92ee383893e26c6af6256f888c521dccdaf7",
+    "lmazure-macos-x64": "b30c30ab9b9bbed0526d12a38303cc6ad34e7a37bfce614e4e4712d14f07b26d",
+    "lmazure-windows-x64.exe": "6fd19404bb0ae57bc9a096f29278777816b96bab16cf3046ebb933e70b01a4fa"
+  }
+}

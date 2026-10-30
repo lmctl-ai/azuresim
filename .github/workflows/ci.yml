@@ -43,6 +43,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y build-essential zlib1g-dev
       - name: Build standalone native executable
         run: python scripts/build.py --native
+      - name: Download checksum-pinned lmazure client
+        run: python scripts/fetch-client.py
       - name: Test standalone executable
         run: |
           mkdir -p dist
@@ -50,6 +52,7 @@ jobs:
           python scripts/test-cli.py 'dist/azuresim-${{ matrix.name }}${{ matrix.ext }}'
           python scripts/test-storage.py 'dist/azuresim-${{ matrix.name }}${{ matrix.ext }}'
           python scripts/test-auth.py 'dist/azuresim-${{ matrix.name }}${{ matrix.ext }}'
+          python scripts/test-lmazure.py 'dist/azuresim-${{ matrix.name }}${{ matrix.ext }}' 'target/lmazure${{ matrix.ext }}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: binary-${{ matrix.name }}
@@ -75,6 +78,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
-          cp LICENSE THIRD_PARTY_NOTICES.md FLOCI-AZ-LICENSE upstream.lock.json dist/
+          cp LICENSE THIRD_PARTY_NOTICES.md FLOCI-AZ-LICENSE upstream.lock.json client.lock.json dist/
           (cd dist && sha256sum * > SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "azuresim $GITHUB_REF_NAME" --generate-notes

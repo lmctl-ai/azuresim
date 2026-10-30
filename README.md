@@ -74,6 +74,8 @@ python3 scripts/build.py --native
 python3 scripts/test-cli.py target/azuresim
 python3 scripts/test-storage.py target/azuresim
 python3 scripts/test-auth.py target/azuresim
+python3 scripts/fetch-client.py
+python3 scripts/test-lmazure.py target/azuresim target/lmazure
 # After the first build caches source and Maven dependencies:
 python3 scripts/build.py --native --offline
 ```
@@ -86,10 +88,14 @@ They verify binary blob round trips, missing resources, queue send/peek/receive,
 visibility and deletion, persistent storage across a restart, and the `start` alias.
 They launch the actual azuresim entrypoint, never an independently started upstream.
 
-GitHub Actions builds and runs both suites on Linux x64/arm64, macOS x64/arm64,
+The lmazure client is pinned to v0.1.5 with per-platform SHA-256 hashes in
+`client.lock.json`. `fetch-client.py` verifies cached and downloaded executables;
+after one fetch, `--offline` forbids downloads. Windows uses `target/lmazure.exe`.
+
+GitHub Actions builds and runs the CLI, storage, auth, and client integration suites on Linux x64/arm64, macOS x64/arm64,
 and Windows x64 on every main push and PR. A `v*` tag matching VERSION publishes
 the tested native binaries plus SHA256SUMS after all five jobs succeed.
-All five platforms passed native tests in [CI run 40975537919](https://github.com/lmctl-ai/azuresim/actions/runs/40975537919).
+The previous 0.1.0 baseline passed all five platforms in [CI run 40975537919](https://github.com/lmctl-ai/azuresim/actions/runs/40975537919); the current workflow also requires auth and lmazure integration checks.
 See [validation evidence](docs/validation.md) for the exact commit and checks.
 
 ## Design and limits

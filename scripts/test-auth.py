@@ -4,12 +4,14 @@ import auth_helpers as helpers
 container = '/' + ACCOUNT + '/allowed'
 blob = container + '/a%20b.txt'
 queue = '/' + ACCOUNT + '-queue/allowed'
-with server(base_config) as base:
+with server({**base_config, 'accounts':{ACCOUNT:KEY,'otheraccount':KEY}}) as base:
     for auth in [None, 'garbage', 'Bearer wrong-secret', 'SharedKey bad:not-base64', 'SharedKey ' + ACCOUNT + ':broken']:
         request(base, 'GET', container, auth=auth, status=403, error='AuthenticationFailed')
     request(base, 'PUT', container + '?restype=container', b'', status=403, error='AuthenticationFailed', key=base64.b64encode(b'wrong-key').decode())
     old = email.utils.format_datetime(datetime.now(timezone.utc)-timedelta(hours=1), usegmt=True)
     request(base, 'GET', container, headers={'x-ms-date':old}, status=403, error='AuthenticationFailed')
+    other_headers = signed('GET', container+'?restype=container', None, {}, account='otheraccount')
+    request(base, 'GET', container+'?restype=container', auth=None, headers=other_headers, status=403, error='AuthenticationFailed')
     request(base, 'PUT', container + '?restype=container', b'', status=201)
     request(base, 'PUT', blob, b'signed bytes', headers={'x-ms-blob-type':'BlockBlob', 'x-ms-meta-label':'  alpha   beta  '}, status=201)
     assert request(base, 'GET', blob) == b'signed bytes'
@@ -26,12 +28,12 @@ with server(base_config) as base:
     headers = signed('GET', blob, None, {'x-ms-meta-test':'original'})
     headers['x-ms-meta-test'] = 'tampered'
     request(base, 'GET', blob, auth=None, headers=headers, status=403, error='AuthenticationFailed')
-    for path in ['/subscriptions', '/'+ACCOUNT+'/allowed?restype=container&comp=acl', '/'+ACCOUNT+'/allowed%2fescape/file', '/'+ACCOUNT+'/allowed/', '/'+ACCOUNT+'//allowed/file']:
+    for path in ['/subscriptions', '/'+ACCOUNT+'/allowed?restype=container&comp=acl', '/'+ACCOUNT+'/allowed%2fescape/file', '/'+ACCOUNT+'/allowed/', '/'+ACCOUNT+'//allowed/file', '/'+ACCOUNT+'/allowed/../allowed/file', '/'+ACCOUNT+'/allowed/%2e%2e/allowed/file']:
         request(base, 'GET', path, auth='bearer', status=403, error='AuthorizationPermissionMismatch')
 
 rules = [
  {'Effect':'Deny','ActionGlob':'*/DELETE','ResourceGlob':'/*','Principal':'*'},
- {'Effect':'Allow','Action':[BLOB+'/*', QUEUE+'/*'], 'ResourceGlob':['/'+ACCOUNT+'/blob/allowed*','/'+ACCOUNT+'/queue/allowed*'], 'Principal':[ACCOUNT,'alice']}
+ {'Effect':'Allow','Action':[BLOB+'/*', QUEUE+'/*'], 'ResourceGlob':['/'+ACCOUNT+'/blob/allow?d*','/'+ACCOUNT+'/queue/allowed*'], 'Principal':[ACCOUNT,'alice']}
 ]
 with server({**base_config, 'Statement':rules}) as base:
     request(base, 'PUT', container+'?restype=container', b'', status=201)
@@ -56,4 +58,10 @@ with tempfile.TemporaryDirectory() as tmp:
         assert result.returncode == 2 and json.loads(result.stdout)['ok'] is False
         assert KEY not in result.stdout+result.stderr and TOKEN not in result.stdout+result.stderr
         checks += 1
+with tempfile.TemporaryDirectory() as tmp:
+    file = Path(tmp)/'duplicate.json'
+    file.write_text('{"tokens":{"test-token":"alice"},"Statement":[],"Statement":[{"Effect":"Allow","Action":"*","ResourceGlob":"*"}]}')
+    result = subprocess.run(command+['serve','--auth','enforce','--auth-config',str(file)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 2 and 'test-token' not in result.stdout+result.stderr
+    checks += 1
 print(f'Auth: {helpers.checks + checks} HTTP/config checks passed (SharedKey, Bearer, policy allow/deny/default-deny, wildcards, redaction)')

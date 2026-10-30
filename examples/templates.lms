@@ -1,0 +1,74 @@
+  fn call(client, args) {
+    result = system(concat([client, "--simulator"], args));
+    assert(result.code == 0, "lmazure operation failed");
+    doc = json_parse(result.stdout);
+    assert(doc.ok == true);
+    return doc;
+  }
+
+# Run through scripts/test-templates.py; all credentials are public test values.
+account = "devstoreaccount1";
+key = "YXp1cmVzaW0tb25seS10ZXN0LWtleS0zMi1ieXRlcyEhIQ==";
+container = "template-container";
+queue = "template-queue";
+label = "quoted \"Azure\" — 雪 \\ path ${opaque}";
+count = 3;
+tags = ["template", "雪"];
+blob_scope = expand("/${account}/blob/${container}*", {account: account, container: container});
+queue_scope = expand("/${account}/queue/${queue}*", {account: account, queue: queue});
+policy = _json_;
+# Policy values are typed substitutions, including the resource list.
+{
+  "accounts": {"devstoreaccount1": ${key}},
+  "Statement": [
+    {"Effect": "Allow", "Action": "Microsoft.Storage/*", "ResourceGlob": [${blob_scope}, ${queue_scope}]},
+    {"Effect": "Deny", "Action": "*/delete", "ResourceGlob": ${blob_scope}}
+  ]
+}
+end _json_
+resources = _json_;
+{"container": ${container}, "queue": ${queue}, "blob": "payload.json"}
+end _json_
+blob = _json_;
+{
+  "name": ${label},
+  "count": ${count},
+  "tags": ${tags},
+  "metadata": {"note": "created by ${label} pipeline"}
+}
+end _json_
+message = _json_;
+{"body": ${label}, "count": ${count}, "tags": ${tags}, "blob": "${container}/payload.json"}
+end _json_
+if (ARGV[0] == "prepare") {
+  write_json("auth.json", policy);
+  write_json("blob.json", blob);
+  write_json("message.json", message);
+} else {
+  client = env("LMAZURE_TEMPLATE_CLIENT");
+  call(client, ["container-create", resources.container]);
+  call(client, ["blob-put", resources.container, resources.blob, "blob.json"]);
+  call(client, ["blob-get", resources.container, resources.blob, "download.json"]);
+  downloaded = read_json("download.json");
+  assert(downloaded.name == label);
+  assert(downloaded.count == 3);
+  assert(downloaded.tags[1] == "雪");
+  assert(downloaded.metadata.note == "created by " + label + " pipeline");
+  call(client, ["queue-create", resources.queue]);
+  call(client, ["queue-send", resources.queue, json_stringify(message)]);
+  peek = call(client, ["queue-peek", resources.queue]);
+  received = json_parse(peek.message);
+  assert(received.body == label);
+  assert(received.count == count);
+  assert(received.tags[1] == "雪");
+  assert(received.blob == container + "/payload.json");
+  if (ARGV[0] == "enforce") {
+    denied = system([client, "--simulator", "container-delete", resources.container]);
+    assert(denied.code == 3);
+    error = json_parse(denied.stdout);
+    assert(error.ok == false);
+    assert(error.status == 403);
+    assert(error.error == "AuthorizationPermissionMismatch");
+  }
+  println("template SDK assertions passed: " + ARGV[0]);
+}

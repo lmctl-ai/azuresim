@@ -76,7 +76,9 @@ public final class Main {
     }
 
     private static void fail(String message) {
-        System.out.println("{\"ok\":false,\"error\":\"" + message + "\"}");
+        System.out.print("""
+            {"ok":false,"error":%s}
+            """.formatted(ResponseTemplates.json(message)));
         System.exit(2);
     }
 }

@@ -1,0 +1,5 @@
+{
+  "name": "azuresim-template-tests",
+  "private": true,
+  "dependencies": {"@lmctl-ai/lmctl": "0.2.444"}
+}

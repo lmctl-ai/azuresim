@@ -30,17 +30,19 @@ opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 checks = 0
 
 @contextmanager
-def server(config, mode='enforce'):
+def server(config, mode='enforce', config_path=None):
     with tempfile.TemporaryDirectory(prefix='azuresim-auth-') as tmp:
         root = Path(tmp)
-        file = root / 'auth.json'
-        file.write_text(json.dumps(config))
+        file = Path(config_path).resolve() if config_path else root / 'auth.json'
+        if config_path is None:
+            file.write_text(json.dumps(config))
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
         with tempfile.TemporaryFile() as log:
             env = {k:v for k,v in os.environ.items() if not k.startswith('AZURESIM_AUTH')}
-            env.update(AZURESIM_AUTH=mode, AZURESIM_AUTH_CONFIG=str(file))
+            env['AZURESIM_AUTH'] = mode
+            if mode == 'enforce': env['AZURESIM_AUTH_CONFIG'] = str(file)
             process = subprocess.Popen(command + ['serve', '--port', str(port)], cwd=root, env=env, stdout=log, stderr=log)
             base = f'http://127.0.0.1:{port}'
             try:

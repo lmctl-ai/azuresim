@@ -55,3 +55,15 @@ Reviewed Microsoft's MIT-licensed Azure/Azurite at commit
 No source was copied or dependency added. The review found no required change
 to the released implementation within our supported scope. Re-ran the 42 auth
 checks and 18 real lmazure SDK checks against the published Linux ARM64 binaries.
+
+## Wave 12 templates
+
+- Simulator mode is a CLI SDK adapter, not a cloud DSL schema operation. Keep
+  `.lms` subprocess arguments as arrays; serialize typed `_json_` values only
+  at the file/message boundary. `expand()` is for non-JSON resource paths.
+- Generate auth configuration before starting the server and pass the generated
+  file itself, avoiding a second policy builder in the test runner.
+- Install the locked compiler locally and invoke its JavaScript entrypoint with
+  Node for Windows portability; never promote the operator's global lmctl.
+- Escape dynamic values inside owned Java response text blocks. Preserve XML
+  and JSON error semantics, and keep upstream protocol builders untouched.

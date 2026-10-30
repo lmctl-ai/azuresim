@@ -130,3 +130,10 @@ See [Wave 11 validation evidence](docs/validation-wave11.md) for exact commits a
   platforms. Do not silently substitute a floating tag or a locally installed server.
 
 MIT; see LICENSE, FLOCI-AZ-LICENSE, and THIRD_PARTY_NOTICES.md.
+
+### LMScript templates
+
+[Template integration](docs/templates.md) uses `_json_` blocks for storage
+payloads and auth policy, plus `expand()` for resource paths. Run
+`scripts/test-templates.py` with the built simulator and pinned lmazure client;
+all five native CI jobs exercise open and SharedKey enforcement modes.

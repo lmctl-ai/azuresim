@@ -154,7 +154,9 @@ public class StorageAuth {
             : "This request is not authorized to perform this operation using this permission.";
         return Response.status(403).type("application/xml").header("x-ms-error-code", code)
             .header("x-ms-request-id", UUID.randomUUID().toString())
-            .entity("<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>" + code + "</Code><Message>" + message + "</Message></Error>").build();
+            .entity("""
+                <?xml version="1.0" encoding="utf-8"?><Error><Code>%s</Code><Message>%s</Message></Error>
+                """.formatted(ResponseTemplates.xml(code), ResponseTemplates.xml(message))).build();
     }
 
     private static boolean matches(List<String> globs, String value) {

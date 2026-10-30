@@ -61,8 +61,9 @@ The distribution pins the HTTP bind address to IPv4 loopback, disables TLS,
 Event Hubs startup and Service Bus boot sidecars.
 Those choices prevent an idle Blob/Queue session from needing containers or
 binding extra service ports. Other upstream services remain present and may
-require Docker when explicitly used. This is a development emulator: SharedKey
-authentication is permissive and it is not a production Azure security boundary.
+require Docker when explicitly used. Open mode preserves permissive upstream authentication. For opt-in SharedKey
+signature validation, dummy Bearer tokens, and storage allow/deny policies, see
+[authentication and permissions](docs/auth.md). This remains a development emulator.
 CLI choices override matching upstream environment variables; other upstream
 `FLOCI_AZ_*` settings are available, including service-specific storage overrides.
 
@@ -72,6 +73,7 @@ CLI choices override matching upstream environment variables; other upstream
 python3 scripts/build.py --native
 python3 scripts/test-cli.py target/azuresim
 python3 scripts/test-storage.py target/azuresim
+python3 scripts/test-auth.py target/azuresim
 # After the first build caches source and Maven dependencies:
 python3 scripts/build.py --native --offline
 ```
@@ -102,10 +104,10 @@ See [validation evidence](docs/validation.md) for the exact commit and checks.
   Docker images but no native release assets. Compiling it produces a standalone
   executable with no first-run download. Maven resolves the upstream dependency
   graph; the lock pins the source archive, not every transitive Maven artifact.
-- **No lmazure integration claim.** .NET is absent on the development machine.
-  We cloned and inspected lmazure; its current storage endpoint guard requires
-  public Azure HTTPS hostnames. Tests therefore use the brief's raw REST fallback.
-  A dedicated lmazure emulator endpoint mode is deferred to that client project.
+- **Real lmazure integration.** The 0.1.5 client adds an explicit loopback-only
+  SDK command without relaxing its live-cloud guards. Our client integration
+  suite tests Blob/Queue operations and auth errors against azuresim. See
+  [auth setup and client quickstart](docs/auth.md).
 - **Scope of validation.** Blob and Queue Storage are tested here. The other
   upstream services, Docker sidecars, TLS, and authentication parity are not
   independently certified by azuresim. See the pinned upstream documentation

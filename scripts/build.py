@@ -34,12 +34,12 @@ source = target / ('floci-az-' + lock['commit'])
 if not source.exists():
     with tarfile.open(archive) as tar:
         tar.extractall(target, filter='data')
-entry = source / 'src/main/java/ai/lmctl/azuresim/Main.java'
-entry.parent.mkdir(parents=True, exist_ok=True)
-entry_source = (ROOT / 'src/main/java/ai/lmctl/azuresim/Main.java').read_text().replace(
-    '@VERSION@', (ROOT / 'VERSION').read_text().strip())
-if not entry.exists() or entry.read_text() != entry_source:
-    entry.write_text(entry_source)
+for overlay in (ROOT / 'src/main/java').rglob('*.java'):
+    entry = source / 'src/main/java' / overlay.relative_to(ROOT / 'src/main/java')
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry_source = overlay.read_text().replace('@VERSION@', (ROOT / 'VERSION').read_text().strip())
+    if not entry.exists() or entry.read_text() != entry_source:
+        entry.write_text(entry_source)
 # docker-java's Unix domain socket initializer resolves libc symbols, which do
 # not exist on Windows. Keep this unused transport out of Windows build-time init.
 if os.name == 'nt':

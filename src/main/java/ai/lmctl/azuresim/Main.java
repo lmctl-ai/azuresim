@@ -18,7 +18,7 @@ public final class Main {
         }
         if (args.length == 0 || (args.length == 1 && args[0].equals("--help"))) {
             System.out.println("azuresim " + VERSION + " (Floci-AZ 0.15.0)\n"
-                + "Usage: azuresim serve|start [--port 4577] [--data-dir PATH]\n"
+                + "Usage: azuresim serve|start [--port 4577] [--data-dir PATH] [--auth open|enforce] [--auth-config FILE]\n"
                 + "       azuresim --version|--help\n"
                 + "Serves HTTP on 127.0.0.1. Memory storage unless --data-dir is supplied.\n"
                 + "Stop with Ctrl-C. Upstream logs go to stderr.");
@@ -29,10 +29,12 @@ public final class Main {
         }
         int port = 4577;
         String data = null;
+        String auth = System.getenv().getOrDefault("AZURESIM_AUTH", "open");
+        String authFile = System.getenv("AZURESIM_AUTH_CONFIG");
         Set<String> seen = new HashSet<>();
         for (int i = 1; i < args.length; i++) {
             String option = args[i];
-            if (!Set.of("--port", "--data-dir").contains(option) || !seen.add(option)) {
+            if (!Set.of("--port", "--data-dir", "--auth", "--auth-config").contains(option) || !seen.add(option)) {
                 fail("Unknown or duplicate option");
             }
             if (++i == args.length || args[i].isBlank()) fail("Missing option value");
@@ -40,13 +42,18 @@ public final class Main {
                 try { port = Integer.parseInt(args[i]); }
                 catch (NumberFormatException e) { fail("Port must be an integer from 1 to 65535"); }
                 if (port < 1 || port > 65535) fail("Port must be an integer from 1 to 65535");
+            } else if (option.equals("--auth")) { auth = args[i];
+            } else if (option.equals("--auth-config")) { authFile = args[i];
             } else {
                 try { data = Path.of(args[i]).toAbsolutePath().toString(); }
                 catch (RuntimeException e) { fail("Invalid data directory"); }
             }
         }
+        try { StorageAuth.configure(auth, authFile); }
+        catch (Exception ignored) { fail("Invalid auth configuration"); }
         // Distribution defaults take precedence over environment variables.
         System.setProperty("quarkus.http.host", "127.0.0.1");
+        System.setProperty("quarkus.http.host-validation.require-localhost", "false");
         System.setProperty("quarkus.http.port", Integer.toString(port));
         System.setProperty("floci-az.port", Integer.toString(port));
         System.setProperty("floci-az.base-url", "http://127.0.0.1:" + port);

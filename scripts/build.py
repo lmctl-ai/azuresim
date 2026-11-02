@@ -58,4 +58,10 @@ if args.native:
     shutil.copy2(source / f'target/floci-az-{lock["version"]}-runner{suffix}', target / ('azuresim' + suffix))
     print(target / ('azuresim' + suffix))
 else:
-    print(source / 'target/quarkus-app/quarkus-run.jar')
+    dist = ROOT / 'dist'
+    dist.mkdir(exist_ok=True)
+    quarkus_dist = dist / 'quarkus-app'
+    if quarkus_dist.exists():
+        shutil.rmtree(quarkus_dist)
+    shutil.copytree(source / 'target/quarkus-app', quarkus_dist)
+    print(quarkus_dist / 'quarkus-run.jar')

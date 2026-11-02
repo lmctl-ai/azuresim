@@ -31,9 +31,38 @@ if not archive.exists():
 if hashlib.sha256(archive.read_bytes()).hexdigest() != lock['sha256']:
     raise SystemExit('Upstream archive checksum mismatch; remove target/upstream.tar.gz to retry')
 source = target / ('floci-az-' + lock['commit'])
-if not source.exists():
-    with tarfile.open(archive) as tar:
-        tar.extractall(target, filter='data')
+if source.exists():
+    shutil.rmtree(source)
+with tarfile.open(archive) as tar:
+    tar.extractall(target, filter='data')
+
+overlay_lock_path = ROOT / 'overlay.lock.json'
+if overlay_lock_path.exists():
+    olock = json.loads(overlay_lock_path.read_text(encoding='utf-8'))
+    expected_upstream = f"{lock['version']}/{lock['commit']}"
+    if olock.get('upstream') not in (expected_upstream, lock['commit']):
+        raise SystemExit(
+            f"overlay.lock.json upstream '{olock.get('upstream')}' does not match "
+            f"upstream.lock.json '{expected_upstream}'. Please 3-way merge overlay files "
+            f"(see durable-memory/semantics-overlay.md) and update overlay.lock.json."
+        )
+    for rel_path, expected_sha in olock.get('overlays', {}).items():
+        upstream_file = source / 'src/main/java' / rel_path
+        if not upstream_file.exists():
+            raise SystemExit(
+                f"Overlay target file '{rel_path}' does not exist in upstream source at {upstream_file}. "
+                f"Please 3-way merge overlay files (see durable-memory/semantics-overlay.md) and update overlay.lock.json."
+            )
+        actual_sha = hashlib.sha256(upstream_file.read_bytes()).hexdigest()
+        if actual_sha != expected_sha:
+            raise SystemExit(
+                f"Upstream file '{rel_path}' sha256 mismatch!\n"
+                f"  Expected: {expected_sha}\n"
+                f"  Actual:   {actual_sha}\n"
+                f"Upstream file changed. Please 3-way merge overlay files "
+                f"(see durable-memory/semantics-overlay.md) and update overlay.lock.json."
+            )
+
 for overlay in (ROOT / 'src/main/java').rglob('*.java'):
     entry = source / 'src/main/java' / overlay.relative_to(ROOT / 'src/main/java')
     entry.parent.mkdir(parents=True, exist_ok=True)

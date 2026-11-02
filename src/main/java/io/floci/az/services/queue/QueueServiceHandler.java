@@ -1,3 +1,4 @@
+// Modified from floci-az 0.15.0 8b439a8ddf90df92315dfdbe95b0498e81384cc0
 package io.floci.az.services.queue;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -204,7 +205,7 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
             if (existing.isPresent()) {
                 Map<String, String> existingMeta = existing.get().metadata();
                 Map<String, String> reqMeta = readMetadataHeaders(request);
-                if (existingMeta.equals(reqMeta)) {
+                if (metadataEquals(existingMeta, reqMeta)) {
                     return Response.status(Response.Status.NO_CONTENT).build();
                 } else {
                     return new AzureErrorResponse("QueueAlreadyExists", "The specified queue already exists.")
@@ -632,10 +633,24 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
         request.headers().getRequestHeaders().forEach((name, values) -> {
             String lower = name.toLowerCase(Locale.ROOT);
             if (lower.startsWith("x-ms-meta-") && !values.isEmpty()) {
-                metadata.put(lower.substring("x-ms-meta-".length()), values.get(0));
+                metadata.put(name.substring("x-ms-meta-".length()), values.get(0));
             }
         });
         return metadata;
+    }
+
+    private static boolean metadataEquals(Map<String, String> m1, Map<String, String> m2) {
+        if (m1 == null && m2 == null) return true;
+        if (m1 == null || m2 == null) return false;
+        Map<String, String> norm1 = normalizeMetadata(m1);
+        Map<String, String> norm2 = normalizeMetadata(m2);
+        return norm1.equals(norm2);
+    }
+
+    private static Map<String, String> normalizeMetadata(Map<String, String> meta) {
+        Map<String, String> norm = new HashMap<>(meta.size());
+        meta.forEach((k, v) -> norm.put(k.toLowerCase(Locale.ROOT), v));
+        return norm;
     }
 
     private static boolean includes(String include, String value) {

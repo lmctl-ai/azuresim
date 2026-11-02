@@ -109,8 +109,11 @@ See [Wave 11 validation evidence](docs/validation-wave11.md) for exact commits a
 
 - **Build integration, not a fork mirror.** `upstream.lock.json` pins release
   0.15.0, commit `8b439a8ddf90df92315dfdbe95b0498e81384cc0`, and its source archive
-  SHA-256. The build verifies the archive before extracting it and adds only our
-  small Quarkus entrypoint. Azure handlers and upstream native metadata stay intact. Windows adds runtime
+  SHA-256. The build verifies the archive before extracting it and adds our Quarkus
+  entrypoint. Selected Blob and Queue service handlers are overlaid to match real Azure
+  semantics (missing container/queue deletion 404s, queue create idempotency, empty-body
+  message visibility updates, and existence guards); see [semantics overlay](durable-memory/semantics-overlay.md)
+  and `overlay.lock.json`. Upstream native metadata stays intact. Windows adds runtime
   initialization for docker-java's Unix DomainSocket class, whose libc symbols
   cannot be resolved during a Windows native build.
 - **Source build instead of downloader.** This release of Floci-AZ publishes

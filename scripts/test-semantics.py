@@ -107,7 +107,7 @@ def main():
             content, status, headers = request('PUT', c_idem + '?restype=container', b'', status=409, return_response=True)
             assert headers.get('x-ms-error-code') == 'ContainerAlreadyExists'
 
-            # 5. PUT queue twice:
+            # 5. PUT queue twice & metadata case preservation / case-insensitive idempotency:
             # Same metadata -> 204 No Content
             # Different metadata -> 409 QueueAlreadyExists
             q_idem = '/devstoreaccount1-queue/idem-q'
@@ -120,6 +120,32 @@ def main():
             request('PUT', q_meta, b'', status=201, headers={'x-ms-meta-color': 'blue'})
             request('PUT', q_meta, b'', status=204, headers={'x-ms-meta-color': 'blue'})  # same metadata -> 204
             content, status, headers = request('PUT', q_meta, b'', status=409, headers={'x-ms-meta-color': 'red'}, return_response=True)
+            assert headers.get('x-ms-error-code') == 'QueueAlreadyExists'
+
+            # Mixed-case metadata names: must PRESERVE case on GET/HEAD, and COMPARE case-insensitively on PUT
+            q_case = '/devstoreaccount1-queue/case-q'
+            request('PUT', q_case, b'', status=201, headers={'x-ms-meta-Environment': 'Production', 'x-ms-meta-Project': 'Alpha'})
+
+            content, status, headers = request('GET', q_case + '?comp=metadata', status=200, return_response=True)
+            assert 'x-ms-meta-Environment' in headers, f"Expected preserved case x-ms-meta-Environment in {headers}"
+            assert headers['x-ms-meta-Environment'] == 'Production'
+            assert 'x-ms-meta-Project' in headers, f"Expected preserved case x-ms-meta-Project in {headers}"
+            assert headers['x-ms-meta-Project'] == 'Alpha'
+
+            content, status, headers = request('HEAD', q_case + '?comp=metadata', status=200, return_response=True)
+            assert 'x-ms-meta-Environment' in headers, f"Expected preserved case x-ms-meta-Environment in {headers}"
+            assert 'x-ms-meta-Project' in headers, f"Expected preserved case x-ms-meta-Project in {headers}"
+
+            # Re-creating with different key casing (lowercase or all caps) returns 204 (Azure case-insensitive rule)
+            request('PUT', q_case, b'', status=204, headers={'x-ms-meta-environment': 'Production', 'x-ms-meta-project': 'Alpha'})
+            request('PUT', q_case, b'', status=204, headers={'x-ms-meta-ENVIRONMENT': 'Production', 'x-ms-meta-PROJECT': 'Alpha'})
+
+            # Re-creating with different value returns 409
+            content, status, headers = request('PUT', q_case, b'', status=409, headers={'x-ms-meta-environment': 'Staging', 'x-ms-meta-project': 'Alpha'}, return_response=True)
+            assert headers.get('x-ms-error-code') == 'QueueAlreadyExists'
+
+            # Re-creating with different key set returns 409
+            content, status, headers = request('PUT', q_case, b'', status=409, headers={'x-ms-meta-environment': 'Production'}, return_response=True)
             assert headers.get('x-ms-error-code') == 'QueueAlreadyExists'
 
             # 6. List blobs on non-existent container -> 404 ContainerNotFound
@@ -229,14 +255,33 @@ def main():
             content, status, headers = request('HEAD', f'{q_work}?comp=metadata', status=200, return_response=True)
             assert 'x-ms-approximate-messages-count' in headers
 
-            # 13. Clean up queues and containers
+            # 13. Clean up queues and containers (leave q_case for restart persistence verification)
             request('DELETE', q_work, status=204)
             request('DELETE', q_idem, status=204)
             request('DELETE', q_meta, status=204)
             request('DELETE', c_idem + '?restype=container', status=202)
             request('DELETE', c_exist + '?restype=container', status=202)
 
-            print(f"Semantics: {checks} checks passed successfully!")
+        # 14. Persistence restart test:
+        # q_case was persisted with mixed-case metadata 'Environment' and 'Project'.
+        # After server restart, re-creating with lowercase metadata headers must return 204 (no spurious 409).
+        with server(directory):
+            content, status, headers = request('GET', q_case + '?comp=metadata', status=200, return_response=True)
+            assert 'x-ms-meta-Environment' in headers, f"Expected persisted case x-ms-meta-Environment in {headers}"
+            assert headers['x-ms-meta-Environment'] == 'Production'
+            assert 'x-ms-meta-Project' in headers, f"Expected persisted case x-ms-meta-Project in {headers}"
+            assert headers['x-ms-meta-Project'] == 'Alpha'
+
+            # Idempotent re-creation with lowercase headers on persisted queue -> 204 No Content (no spurious 409)
+            request('PUT', q_case, b'', status=204, headers={'x-ms-meta-environment': 'Production', 'x-ms-meta-project': 'Alpha'})
+
+            # Re-creating with different value -> 409
+            request('PUT', q_case, b'', status=409, headers={'x-ms-meta-environment': 'Staging', 'x-ms-meta-project': 'Alpha'})
+
+            # Clean up q_case
+            request('DELETE', q_case, status=204)
+
+        print(f"Semantics: {checks} checks passed successfully!")
 
 if __name__ == '__main__':
     main()

@@ -92,12 +92,32 @@ Re-copy both files from the newly extracted upstream source, then re-apply the h
   Upstream swept queue message keys without checking if the queue existed, returning `204 No Content`.
   *Fix:* Check `if (store.get(nsKey(account, queueName)).isEmpty()) return queueNotFound();`.
 
-- **`readMetadataHeaders(request)`**:
-  Header names in HTTP requests can vary in casing (`x-ms-meta-Foo` vs `x-ms-meta-foo`). Upstream stored the substring with original case.
-  *Fix:* Lowercase the metadata key name so metadata comparisons in `createQueue` are case-insensitive per Azure identifier rules.
+- **`readMetadataHeaders(request)` & `metadataEquals`**:
+  Metadata names must PRESERVE the case they were created with (`x-ms-meta-Environment` stays `x-ms-meta-Environment` on GET/HEAD responses) while being COMPARED case-insensitively per Azure rules for the create-idempotency 204 vs 409 decision.
+  *Fix:* `readMetadataHeaders` preserves the exact case of `x-ms-meta-*` header names sent by clients (`name.substring("x-ms-meta-".length())`). For queue creation idempotency, `metadataEquals` normalizes keys to lowercase before comparing, ensuring that mixed-case variations (`x-ms-meta-Environment` vs `x-ms-meta-environment`) and previously persisted mixed-case queue metadata do not cause spurious 409 conflicts.
 
 - **`handle(request)`**:
   Allow both `GET` and `HEAD` requests on `comp=metadata` to return `getQueueMetadata` with `x-ms-approximate-messages-count` and `x-ms-meta-*` headers.
+
+---
+
+## 4. Overlay Lock (`overlay.lock.json`)
+
+To ensure upstream updates do not silently break overlay assumptions, `overlay.lock.json` records the exact SHA-256 hashes of the original upstream files:
+```json
+{
+  "upstream": "0.15.0/8b439a8ddf90df92315dfdbe95b0498e81384cc0",
+  "overlays": {
+    "io/floci/az/services/blob/BlobServiceHandler.java": "739a34fb36ab4ae549f539a8481599d4a14c5f74502d6f5e7b0e1077fc43e6d1",
+    "io/floci/az/services/queue/QueueServiceHandler.java": "6224329a682fe2f9001fc461dd4dbc19dadc0269eef32840c8d69475ddde4577"
+  }
+}
+```
+`scripts/build.py` enforces this contract:
+1. Always extracts fresh from the verified upstream archive into a clean directory.
+2. Before overlaying, verifies that each listed overlay file exists upstream and matches its locked SHA-256 hash.
+3. If an upstream hash changes, the build fails immediately, directing the maintainer to perform a 3-way merge and update the lock.
+4. Each copied overlay file begins with the header `// Modified from floci-az 0.15.0 8b439a8ddf90df92315dfdbe95b0498e81384cc0`.
 
 ---
 

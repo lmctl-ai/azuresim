@@ -2,7 +2,9 @@
 
 azuresim incorporates Floci-AZ 0.15.0, copyright Floci contributors,
 under the MIT license reproduced in FLOCI-AZ-LICENSE. See upstream.lock.json
-for the exact source revision and archive checksum.
+for the exact source revision and archive checksum. Selected service handlers
+are overlaid to match Azure Blob and Queue semantics; see overlay.lock.json
+and durable-memory/semantics-overlay.md.
 
 Floci-AZ's Maven dependencies retain their respective licenses. These include
 Quarkus, Vert.x, Jackson, Apache HTTP components, Apache ActiveMQ Artemis and

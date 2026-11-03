@@ -2,16 +2,39 @@ name: ci
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check automatic version contract
+        run: python3 scripts/test-release-version.py
+      - id: version
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            version="$(bash scripts/derive-release-version.sh "$GITHUB_RUN_NUMBER")"
+            release=true
+          else
+            version="$(bash scripts/derive-release-version.sh --diagnostic)"
+            release=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "azuresim version $version (release=$release)"
   native:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +53,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Stamp CI release version
+        run: printf '%s\n' '${{ needs.version.outputs.version }}' > VERSION
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -66,11 +91,13 @@ jobs:
           path: dist/*
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: native
+    if: needs.version.outputs.release == 'true'
+    needs: [version, native]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -84,7 +111,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
           cp LICENSE THIRD_PARTY_NOTICES.md FLOCI-AZ-LICENSE upstream.lock.json client.lock.json overlay.lock.json dist/
           (cd dist && sha256sum * > SHA256SUMS)
-          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "azuresim $GITHUB_REF_NAME" --generate-notes
+          scripts/publish-release.sh "v$RELEASE_VERSION" "$GITHUB_WORKSPACE/dist"

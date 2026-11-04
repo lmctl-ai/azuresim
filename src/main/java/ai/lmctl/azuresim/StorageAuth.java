@@ -342,6 +342,62 @@ public class StorageAuth {
         return cur;
     }
 
+    private static boolean isEmulatorAdminPath(String trimmed) {
+        return trimmed.equals("health") || trimmed.equals("ready")
+            || trimmed.startsWith("_floci/") || trimmed.startsWith("_admin");
+    }
+
+    private static boolean isEntraPath(String trimmed) {
+        return trimmed.contains("oauth2/v2.0/token") || trimmed.endsWith("oauth2/token")
+            || trimmed.contains("oauth2/v2.0/authorize")
+            || trimmed.endsWith("discovery/v2.0/keys")
+            || trimmed.endsWith(".well-known/openid-configuration");
+    }
+
+    private static boolean isInterceptedBeforeStorageTerminal(String trimmed, String firstSegment,
+            Map<String, String> headers, Map<String, List<String>> q) {
+        if (trimmed.startsWith("metadata/identity/") || trimmed.equalsIgnoreCase("msi/token")
+                || isEntraPath(trimmed) || trimmed.startsWith("metadata/endpoints") || trimmed.startsWith("v1.0/")
+                || trimmed.startsWith("dataCollectionRules/") || trimmed.startsWith("v1/workspaces/")
+                || trimmed.toLowerCase(Locale.ROOT).contains("/providers/microsoft.insights/diagnosticsettings")
+                || trimmed.startsWith("emails:") || trimmed.startsWith("emails/") || trimmed.startsWith("emailMessages")
+                || trimmed.startsWith("providers/") || trimmed.startsWith("subscriptions/") || trimmed.equals("subscriptions")
+                || trimmed.startsWith("tenants/") || trimmed.equals("tenants")
+                || trimmed.startsWith("$namespaceinfo") || trimmed.startsWith("$Resources")) {
+            return true;
+        }
+        if (firstSegment.isEmpty() || Set.of("secrets", "certificates", "keys", "deletedsecrets",
+                "deletedcertificates", "deletedkeys", "rng", "dbs", "colls", "docs", "pkranges",
+                "offers", "sprocs", "triggers", "udfs").contains(firstSegment)) {
+            return true;
+        }
+        String ct = headers.getOrDefault("content-type", "");
+        String accept = headers.getOrDefault("accept", "");
+        String ua = headers.getOrDefault("user-agent", "");
+        if (ct.contains("application/atom+xml") || accept.contains("application/atom+xml")) {
+            return true;
+        }
+        return ua.contains("azsdk-net-Messaging.ServiceBus/") && q.containsKey("api-version");
+    }
+
+    private static String resolvePathStyleStorageService(Map<String, String> headers,
+            Map<String, List<String>> q, String resourcePath) {
+        if (headers.containsKey("x-ms-blob-type")) {
+            return "blob";
+        }
+        if (resourcePath.contains("/messages") || resourcePath.endsWith("/messages")) {
+            return "queue";
+        }
+        List<String> restype = q.get("restype");
+        if (restype != null && restype.contains("queue")) {
+            return "queue";
+        }
+        if (headers.containsKey("x-ms-queue-message-count")) {
+            return "queue";
+        }
+        return "blob";
+    }
+
     private static Target target(ContainerRequestContext r, Map<String, String> headers, URI wireUri) {
         String raw = wireUri.getRawPath();
         if (raw == null || raw.isEmpty() || !raw.startsWith("/")) return null;
@@ -355,7 +411,24 @@ public class StorageAuth {
         }
         String unwrapped = unwrapAndValidate(path);
         if (unwrapped == null) return null;
+        if (isEmulatorAdminPath(path.substring(1)) || isEmulatorAdminPath(unwrapped.substring(1))) return null;
         String host = headers.getOrDefault("host", "").split(":")[0].toLowerCase(Locale.ROOT);
+        if (r != null && r.getUriInfo() != null && r.getUriInfo().getRequestUri() != null) {
+            String reqHost = r.getUriInfo().getRequestUri().getHost();
+            if (reqHost != null && !reqHost.isBlank() && !reqHost.split(":")[0].toLowerCase(Locale.ROOT).equals(host)) {
+                return null;
+            }
+        }
+        Map<String, List<String>> q = query(wireUri.getRawQuery());
+        for (String key : Set.of("comp", "restype", "peekonly", "action", "resource", "snapshot")) {
+            if (q.containsKey(key)) {
+                if (q.get(key).size() != 1) return null;
+                if (r != null && r.getUriInfo() != null && r.getUriInfo().getQueryParameters() != null) {
+                    List<String> routerVals = r.getUriInfo().getQueryParameters().get(key);
+                    if (routerVals == null || !routerVals.equals(q.get(key))) return null;
+                }
+            }
+        }
         String account, service, serviceUnwrappedPath;
         if (host.matches("[a-z0-9]{3,24}\\.(blob|queue)\\.core\\.windows\\.net")) {
             String[] bits = host.split("\\."); account = bits[0]; service = bits[1];
@@ -365,19 +438,35 @@ public class StorageAuth {
             String[] parts = path.split("/", 3);
             String[] unwrappedParts = unwrapped.split("/", 3);
             if (parts.length < 2 || unwrappedParts.length != parts.length || !parts[1].equals(unwrappedParts[1])) return null;
-            service = parts[1].endsWith("-queue") ? "queue" : "blob";
-            account = service.equals("queue") ? parts[1].substring(0, parts[1].length() - 6) : parts[1];
-            path = parts.length == 3 ? "/" + parts[2] : "/";
-            serviceUnwrappedPath = unwrappedParts.length == 3 ? "/" + unwrappedParts[2] : "/";
+            String firstSegment = parts[1];
+            String resourcePath = parts.length == 3 ? parts[2] : "";
+            String unwrappedResourcePath = unwrappedParts.length == 3 ? unwrappedParts[2] : "";
+            if (isInterceptedBeforeStorageTerminal(path.substring(1), firstSegment, headers, q)
+                    || isInterceptedBeforeStorageTerminal(unwrapped.substring(1), firstSegment, headers, q)) {
+                return null;
+            }
+            if (firstSegment.endsWith("-queue")) {
+                service = "queue";
+                account = firstSegment.substring(0, firstSegment.length() - 6);
+            } else {
+                account = firstSegment;
+                service = resolvePathStyleStorageService(headers, q, resourcePath);
+                String unwrappedService = resolvePathStyleStorageService(headers, q, unwrappedResourcePath);
+                if (!service.equals(unwrappedService)) return null;
+            }
+            path = parts.length == 3 ? "/" + resourcePath : "/";
+            serviceUnwrappedPath = unwrappedParts.length == 3 ? "/" + unwrappedResourcePath : "/";
         }
         if (!account.matches("[a-z0-9]{3,24}")) return null;
-        Map<String, List<String>> q = query(wireUri.getRawQuery());
         String comp = q.getOrDefault("comp", List.of("")).getFirst();
         String method = r.getMethod();
         String action = null;
         int segments = (int) Arrays.stream(path.split("/")).filter(v -> !v.isEmpty()).count();
         if (service.equals("blob")) {
-            boolean container = q.getOrDefault("restype", List.of("")).equals(List.of("container"));
+            if (headers.containsKey("x-ms-copy-source") || headers.containsKey("x-ms-rename-source")) return null;
+            List<String> restype = q.getOrDefault("restype", List.of(""));
+            boolean container = restype.equals(List.of("container"));
+            if (!restype.equals(List.of("")) && !container) return null;
             String prefix = "Microsoft.Storage/storageAccounts/blobServices/containers";
             if (segments == 0 && method.equals("GET") && comp.equals("list")) action = prefix + "/read";
             else if (container && segments == 1 && (comp.isEmpty() || comp.equals("list") || comp.equals("metadata")))
@@ -390,10 +479,10 @@ public class StorageAuth {
             else if (segments == 1 && (comp.isEmpty() || comp.equals("metadata"))) action = prefix + suffix(method);
             else if (path.matches("/[^/]+/messages(?:/[^/]+)?") && comp.isEmpty()) {
                 String operation = switch (method) {
-                    case "POST" -> "/add/action";
-                    case "GET" -> q.getOrDefault("peekonly", List.of("false")).equals(List.of("true")) ? "/read" : "/process/action";
+                    case "POST" -> segments == 2 ? "/add/action" : null;
+                    case "GET" -> segments == 2 ? (q.getOrDefault("peekonly", List.of("false")).equals(List.of("true")) ? "/read" : "/process/action") : null;
                     case "DELETE" -> "/delete";
-                    case "PUT" -> "/write";
+                    case "PUT" -> segments == 3 ? "/write" : null;
                     default -> null;
                 };
                 if (operation != null) action = prefix + "/messages" + operation;

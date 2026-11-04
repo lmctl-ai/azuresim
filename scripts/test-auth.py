@@ -106,6 +106,49 @@ with server({**base_config, 'Statement':[{'Effect':'Allow','Action':'*','Resourc
 with server({**base_config, 'Statement':[]}) as base:
     request(base, 'GET', container+'?restype=container', auth='bearer', status=403, error='AuthorizationPermissionMismatch')
 
+# Cross-service router/authorizer alignment: path-style /messages (and %6dessages), restype=queue,
+# x-ms-queue-message-count, and x-ms-blob-type header-forced-blob dispatch must authorize the exact
+# service and resource that AzureRoutingFilter dispatches to.
+cross_service_config = {
+    'accounts': {ACCOUNT: KEY},
+    'tokens': {TOKEN: 'alice', 'bob-queue-token': 'bob'},
+    'Statement': [
+        {'Effect': 'Allow', 'ActionGlob': '*', 'ResourceGlob': '/*', 'Principal': ACCOUNT},
+        {'Effect': 'Allow', 'ActionGlob': BLOB + '/blobs/read', 'ResourceGlob': '/' + ACCOUNT + '/blob/allowed*', 'Principal': 'alice'},
+        {'Effect': 'Deny', 'ActionGlob': QUEUE + '/*', 'ResourceGlob': '/' + ACCOUNT + '/queue/*', 'Principal': 'alice'},
+        {'Effect': 'Allow', 'ActionGlob': QUEUE + '/*', 'ResourceGlob': '/' + ACCOUNT + '/queue/allowed*', 'Principal': 'bob'},
+        {'Effect': 'Deny', 'ActionGlob': BLOB + '/*', 'ResourceGlob': '/' + ACCOUNT + '/blob/*', 'Principal': 'bob'},
+    ]
+}
+with server(cross_service_config) as base:
+    request(base, 'PUT', container + '?restype=container', b'', status=201)
+    request(base, 'PUT', container + '/messages', b'BLOB_NAMED_MESSAGES', headers={'x-ms-blob-type': 'BlockBlob'}, status=201)
+    request(base, 'PUT', queue, b'', status=201)
+    request(base, 'POST', queue + '/messages', b'<QueueMessage><MessageText>DENIED_QUEUE_SECRET</MessageText></QueueMessage>', status=201)
+    # Direct queue access and blob write are denied for blob-read-only alice.
+    request(base, 'GET', queue + '/messages?peekonly=true', auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+    request(base, 'PUT', container + '/not-permitted', b'nope', auth='bearer', headers={'x-ms-blob-type': 'BlockBlob'}, status=403, error='AuthorizationPermissionMismatch')
+    # Unsuffixed path-style /messages and %6dessages route to QueueServiceHandler unless x-ms-blob-type is set;
+    # alice must be denied on both peek and receive/consume, as well as POST/DELETE and restype=queue / header selectors.
+    for msg_path in [container + '/messages', container + '/%6dessages']:
+        request(base, 'GET', msg_path + '?peekonly=true', auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+        request(base, 'GET', msg_path, auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+        request(base, 'POST', msg_path, b'<QueueMessage><MessageText>inject</MessageText></QueueMessage>', auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+        request(base, 'DELETE', msg_path, auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+    request(base, 'GET', container + '?restype=queue', auth='bearer', status=403, error='AuthorizationPermissionMismatch')
+    request(base, 'GET', container, auth='bearer', headers={'x-ms-queue-message-count': '0'}, status=403, error='AuthorizationPermissionMismatch')
+    # Queue message must remain unconsumed (DequeueCount == 0) after alice's denied attempts.
+    admin_peek = request(base, 'GET', queue + '/messages?peekonly=true')
+    assert b'DENIED_QUEUE_SECRET' in admin_peek and b'<DequeueCount>0</DequeueCount>' in admin_peek
+    # Header-forced-blob variant: x-ms-blob-type forces AzureRoutingFilter to BlobServiceHandler.
+    # Alice (blob-read) reads the blob named "messages" without touching the queue; bob (queue-only, blob-denied) is denied.
+    for msg_path in [container + '/messages', container + '/%6dessages']:
+        assert request(base, 'GET', msg_path, auth='bearer', headers={'x-ms-blob-type': 'BlockBlob'}) == b'BLOB_NAMED_MESSAGES'
+        request(base, 'GET', msg_path, auth='Bearer bob-queue-token', headers={'x-ms-blob-type': 'BlockBlob'}, status=403, error='AuthorizationPermissionMismatch')
+        assert b'DENIED_QUEUE_SECRET' in request(base, 'GET', msg_path + '?peekonly=true', auth='Bearer bob-queue-token')
+    admin_peek_after = request(base, 'GET', queue + '/messages?peekonly=true')
+    assert b'DENIED_QUEUE_SECRET' in admin_peek_after and b'<DequeueCount>0</DequeueCount>' in admin_peek_after
+
 with tempfile.TemporaryDirectory() as tmp:
     for value in [{}, {**base_config,'Statement':[{'Effect':'Typo','Action':'*','ResourceGlob':'*'}]},
                   {**base_config,'Statements':[]}, {**base_config,'Statement':None}, {**base_config,'Statement':[{'Effect':'Allow','Action':'*','ActionGlob':'*','ResourceGlob':'*'}]}]:

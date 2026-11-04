@@ -97,7 +97,11 @@ Unsupported routes produce permission errors after Bearer authentication; a
 SharedKey request without a recognized target produces AuthenticationFailed.
 Ambiguous paths (encoded slash/backslash, double-encoded traversal or delimiters, dot
 segments, semicolons, repeated slashes, trailing slashes) are rejected in enforce mode
-to prevent policy alias bypasses. These are deliberate compatibility limits. Open mode retains upstream
+to prevent policy alias bypasses. Path-style service selection (`blob` vs `queue`) mirrors
+the upstream router's exact resolution on the decoded path (including `/messages`,
+`restype=queue`, `x-ms-queue-message-count`, and `x-ms-blob-type` override) and fails
+closed when a request would be intercepted by a non-storage route. These are deliberate
+compatibility limits. Open mode retains upstream
 behavior. Payload-integrity checks beyond SharedKey's signed headers remain the
 responsibility of the upstream storage handlers.
 

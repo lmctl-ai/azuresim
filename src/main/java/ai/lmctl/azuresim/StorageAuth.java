@@ -8,10 +8,13 @@ import jakarta.ws.rs.core.Response;
 import org.jboss.resteasy.reactive.server.ServerRequestFilter;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayOutputStream;
 import java.net.URLDecoder;
 import java.net.URI;
 import io.vertx.core.http.HttpServerRequest;
 import jakarta.ws.rs.core.Context;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,8 +31,9 @@ public class StorageAuth {
     private static volatile Config config;
     private record Rule(boolean deny, List<String> actions, List<String> resources, List<String> principals) {}
     private record Config(Map<String, byte[]> accounts, Map<String, String> tokens, boolean policyPresent, List<Rule> rules) {}
-    private record Target(String account, String service, String path, String action) {
+    private record Target(String account, String service, String path, String unwrappedPath, String action) {
         String resource() { return "/" + account + "/" + service + path; }
+        String unwrappedResource() { return "/" + account + "/" + service + unwrappedPath; }
     }
 
     static void configure(String mode, String file) throws Exception {
@@ -110,6 +114,7 @@ public class StorageAuth {
             }
             URI wireUri = URI.create(wireRequest.uri());
             Target target = target(request, headers, wireUri);
+            String targetAccount = target != null ? target.account : resolveAccount(headers, wireUri);
             String authorization = headers.getOrDefault("authorization", "");
             String principal;
             if (authorization.startsWith("Bearer ")) {
@@ -119,9 +124,9 @@ public class StorageAuth {
                     if (MessageDigest.isEqual(offered, token.getKey().getBytes(StandardCharsets.UTF_8))) principal = token.getValue();
                 }
                 if (principal == null) return error("AuthenticationFailed");
-            } else if (authorization.startsWith("SharedKey ") && target != null) {
+            } else if (authorization.startsWith("SharedKey ") && targetAccount != null) {
                 String[] credentials = authorization.substring(10).split(":", -1);
-                if (credentials.length != 2 || !credentials[0].equals(target.account)) return error("AuthenticationFailed");
+                if (credentials.length != 2 || !credentials[0].equals(targetAccount)) return error("AuthenticationFailed");
                 byte[] key = c.accounts.get(credentials[0]);
                 if (key == null) return error("AuthenticationFailed");
                 String date = headers.getOrDefault("x-ms-date", headers.getOrDefault("date", ""));
@@ -129,7 +134,7 @@ public class StorageAuth {
                 if (Math.abs(Instant.now().getEpochSecond() - stamp.getEpochSecond()) > 900) return error("AuthenticationFailed");
                 Mac mac = Mac.getInstance("HmacSHA256");
                 mac.init(new SecretKeySpec(key, "HmacSHA256"));
-                byte[] expected = mac.doFinal(canonical(request, headers, target.account, wireUri).getBytes(StandardCharsets.UTF_8));
+                byte[] expected = mac.doFinal(canonical(request, headers, targetAccount, wireUri).getBytes(StandardCharsets.UTF_8));
                 if (!MessageDigest.isEqual(expected, Base64.getDecoder().decode(credentials[1]))) return error("AuthenticationFailed");
                 principal = credentials[0];
             } else return error("AuthenticationFailed");
@@ -137,9 +142,13 @@ public class StorageAuth {
             if (target == null || target.action == null) return error("AuthorizationPermissionMismatch");
             boolean allowed = !c.policyPresent;
             for (Rule rule : c.rules) {
-                if (matches(rule.actions.stream().map(v -> v.toLowerCase(Locale.ROOT)).toList(), target.action.toLowerCase(Locale.ROOT)) && matches(rule.resources, target.resource()) && matches(rule.principals, principal)) {
-                    if (rule.deny) return error("AuthorizationPermissionMismatch");
-                    allowed = true;
+                if (matches(rule.actions.stream().map(v -> v.toLowerCase(Locale.ROOT)).toList(), target.action.toLowerCase(Locale.ROOT)) && matches(rule.principals, principal)) {
+                    if (rule.deny && (matches(rule.resources, target.resource()) || matches(rule.resources, target.unwrappedResource()))) {
+                        return error("AuthorizationPermissionMismatch");
+                    }
+                    if (!rule.deny && matches(rule.resources, target.resource())) {
+                        allowed = true;
+                    }
                 }
             }
             return allowed ? null : error("AuthorizationPermissionMismatch");
@@ -213,22 +222,153 @@ public class StorageAuth {
         return out.toString();
     }
 
+    private static String resolveAccount(Map<String, String> headers, URI wireUri) {
+        String host = headers.getOrDefault("host", "").split(":")[0].toLowerCase(Locale.ROOT);
+        if (host.matches("[a-z0-9]{3,24}\\.(blob|queue)\\.core\\.windows\\.net")) {
+            return host.split("\\.")[0];
+        }
+        if (!(host.equals("127.0.0.1") || host.equals("localhost"))) return null;
+        String raw = wireUri.getRawPath();
+        if (raw == null || !raw.startsWith("/")) return null;
+        String[] parts = raw.split("/", 3);
+        if (parts.length < 2) return null;
+        String seg = parts[1].toLowerCase(Locale.ROOT).split("%2f|%5c|%252f|%255c", 2)[0];
+        String acct = seg.endsWith("-queue") ? seg.substring(0, seg.length() - 6) : seg;
+        return acct.matches("[a-z0-9]{3,24}") ? acct : null;
+    }
+
+    private static String decodeOnceStrict(String raw) {
+        if (raw == null || !raw.startsWith("/")) return null;
+        ByteArrayOutputStream out = new ByteArrayOutputStream(raw.length());
+        for (int i = 0; i < raw.length(); ) {
+            char ch = raw.charAt(i);
+            if (ch == '%') {
+                if (i + 2 >= raw.length()) return null;
+                int hi = Character.digit(raw.charAt(i + 1), 16);
+                int lo = Character.digit(raw.charAt(i + 2), 16);
+                if (hi < 0 || lo < 0) return null;
+                out.write((hi << 4) | lo);
+                i += 3;
+            } else {
+                int next = raw.indexOf('%', i);
+                if (next < 0) next = raw.length();
+                byte[] utf8 = raw.substring(i, next).getBytes(StandardCharsets.UTF_8);
+                out.write(utf8, 0, utf8.length);
+                i = next;
+            }
+        }
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(out.toByteArray())).toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean hasInvalidPathShape(String p) {
+        if (p == null || p.isEmpty() || !p.startsWith("/")) return true;
+        if (p.contains("\\") || p.contains(";") || p.contains("//") || (p.length() > 1 && p.endsWith("/"))) return true;
+        for (int i = 0; i < p.length(); i++) {
+            char ch = p.charAt(i);
+            if (ch < 0x20 || ch == 0x7f) return true;
+        }
+        return Arrays.asList(p.split("/", -1)).stream().anyMatch(v -> v.equals(".") || v.equals(".."));
+    }
+
+    private static int hexByteAt(String s, int i) {
+        if (i + 2 >= s.length() || s.charAt(i) != '%') return -1;
+        int hi = Character.digit(s.charAt(i + 1), 16);
+        int lo = Character.digit(s.charAt(i + 2), 16);
+        return (hi >= 0 && lo >= 0) ? ((hi << 4) | lo) : -1;
+    }
+
+    private static String decodeRelaxedOnce(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); ) {
+            int b0 = hexByteAt(s, i);
+            if (b0 < 0) {
+                out.append(s.charAt(i++));
+            } else if (b0 < 0x80) {
+                out.append((char) b0);
+                i += 3;
+            } else {
+                int b1 = hexByteAt(s, i + 3);
+                if ((b0 & 0xE0) == 0xC0 && b1 >= 0x80 && b1 <= 0xBF) {
+                    if (b0 < 0xC2) return null; // overlong 2-byte UTF-8
+                    out.append(new String(new byte[]{(byte) b0, (byte) b1}, StandardCharsets.UTF_8));
+                    i += 6;
+                } else if ((b0 & 0xF0) == 0xE0 && b1 >= 0x80 && b1 <= 0xBF) {
+                    int b2 = hexByteAt(s, i + 6);
+                    if (b2 >= 0x80 && b2 <= 0xBF) {
+                        if ((b0 == 0xE0 && b1 < 0xA0) || (b0 == 0xED && b1 >= 0xA0)) return null; // overlong or surrogate
+                        out.append(new String(new byte[]{(byte) b0, (byte) b1, (byte) b2}, StandardCharsets.UTF_8));
+                        i += 9;
+                    } else {
+                        out.append(s, i, i + 3);
+                        i += 3;
+                    }
+                } else if ((b0 & 0xF8) == 0xF0 && b1 >= 0x80 && b1 <= 0xBF) {
+                    int b2 = hexByteAt(s, i + 6), b3 = hexByteAt(s, i + 9);
+                    if (b2 >= 0x80 && b2 <= 0xBF && b3 >= 0x80 && b3 <= 0xBF) {
+                        if ((b0 == 0xF0 && b1 < 0x90) || b0 > 0xF4 || (b0 == 0xF4 && b1 >= 0x90)) return null;
+                        out.append(new String(new byte[]{(byte) b0, (byte) b1, (byte) b2, (byte) b3}, StandardCharsets.UTF_8));
+                        i += 12;
+                    } else {
+                        out.append(s, i, i + 3);
+                        i += 3;
+                    }
+                } else {
+                    out.append(s, i, i + 3);
+                    i += 3;
+                }
+            }
+        }
+        return out.toString();
+    }
+
+    private static String unwrapAndValidate(String path) {
+        String cur = path;
+        for (int depth = 0; depth < 8 && cur.contains("%"); depth++) {
+            if (cur.toLowerCase(Locale.ROOT).matches(".*%(2f|5c|00|3b).*")) return null;
+            String next = decodeRelaxedOnce(cur);
+            if (next == null || hasInvalidPathShape(next)) return null;
+            if (next.equals(cur)) return cur;
+            cur = next;
+        }
+        String extra = decodeRelaxedOnce(cur);
+        if (extra == null || !extra.equals(cur)) return null;
+        return cur;
+    }
+
     private static Target target(ContainerRequestContext r, Map<String, String> headers, URI wireUri) {
         String raw = wireUri.getRawPath();
-        String path = wireUri.getPath();
-        if (raw.toLowerCase(Locale.ROOT).matches(".*%(2f|5c|25).*") || path.contains("\\") || path.contains(";") || path.contains("//") || (path.length() > 1 && path.endsWith("/"))
-                || Arrays.asList(path.split("/", -1)).stream().anyMatch(v -> v.equals(".") || v.equals(".."))) return null;
+        if (raw == null || raw.isEmpty() || !raw.startsWith("/")) return null;
+        if (raw.contains("\\") || raw.contains(";") || raw.contains("//") || raw.toLowerCase(Locale.ROOT).matches(".*%(2f|5c|00).*")) return null;
+        String path = decodeOnceStrict(raw);
+        if (path == null || !path.equals(wireUri.getPath()) || hasInvalidPathShape(path)) return null;
+        if (r != null && r.getUriInfo() != null && r.getUriInfo().getPath() != null) {
+            String routerPath = r.getUriInfo().getPath();
+            if (!routerPath.startsWith("/")) routerPath = "/" + routerPath;
+            if (!path.equals(routerPath)) return null;
+        }
+        String unwrapped = unwrapAndValidate(path);
+        if (unwrapped == null) return null;
         String host = headers.getOrDefault("host", "").split(":")[0].toLowerCase(Locale.ROOT);
-        String account, service;
+        String account, service, serviceUnwrappedPath;
         if (host.matches("[a-z0-9]{3,24}\\.(blob|queue)\\.core\\.windows\\.net")) {
             String[] bits = host.split("\\."); account = bits[0]; service = bits[1];
+            serviceUnwrappedPath = unwrapped;
         } else {
             if (!(host.equals("127.0.0.1") || host.equals("localhost"))) return null;
             String[] parts = path.split("/", 3);
-            if (parts.length < 2) return null;
+            String[] unwrappedParts = unwrapped.split("/", 3);
+            if (parts.length < 2 || unwrappedParts.length != parts.length || !parts[1].equals(unwrappedParts[1])) return null;
             service = parts[1].endsWith("-queue") ? "queue" : "blob";
             account = service.equals("queue") ? parts[1].substring(0, parts[1].length() - 6) : parts[1];
             path = parts.length == 3 ? "/" + parts[2] : "/";
+            serviceUnwrappedPath = unwrappedParts.length == 3 ? "/" + unwrappedParts[2] : "/";
         }
         if (!account.matches("[a-z0-9]{3,24}")) return null;
         Map<String, List<String>> q = query(wireUri.getRawQuery());
@@ -260,7 +400,7 @@ public class StorageAuth {
             }
         }
         if (action != null && action.endsWith("null")) action = null;
-        return new Target(account, service, path, action);
+        return new Target(account, service, path, serviceUnwrappedPath, action);
     }
     private static String suffix(String method) {
         return switch (method) { case "GET", "HEAD" -> "/read"; case "PUT" -> "/write"; case "DELETE" -> "/delete"; default -> null; };

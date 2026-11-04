@@ -95,9 +95,9 @@ Enforce mode rejects all other services and unsupported storage operations,
 including SAS/SharedKeyLite, Table, ARM, ACL operations, and TLS-specific auth.
 Unsupported routes produce permission errors after Bearer authentication; a
 SharedKey request without a recognized target produces AuthenticationFailed.
-Ambiguous paths (encoded slash/backslash/percent, dot segments, semicolons, repeated
-slashes, trailing slashes) are rejected in enforce mode to prevent policy alias
-bypasses. These are deliberate compatibility limits. Open mode retains upstream
+Ambiguous paths (encoded slash/backslash, double-encoded traversal or delimiters, dot
+segments, semicolons, repeated slashes, trailing slashes) are rejected in enforce mode
+to prevent policy alias bypasses. These are deliberate compatibility limits. Open mode retains upstream
 behavior. Payload-integrity checks beyond SharedKey's signed headers remain the
 responsibility of the upstream storage handlers.
 

@@ -103,16 +103,20 @@ Re-copy both files from the newly extracted upstream source, then re-apply the h
 
 ## 4. Overlay Lock (`overlay.lock.json`)
 
-To ensure upstream updates do not silently break overlay assumptions, `overlay.lock.json` records the exact SHA-256 hashes of the original upstream files:
+To ensure upstream updates do not silently break overlay or authorizer-routing alignment assumptions, `overlay.lock.json` records the exact SHA-256 hashes of the original upstream files (both replaced handlers and the unreplaced routing classes `AzureRoutingFilter`, `ArmRouter`, and `ScopeResolver` whose route-interception and service-selection rules are mirrored in `StorageAuth.java`):
 ```json
 {
   "upstream": "0.15.0/8b439a8ddf90df92315dfdbe95b0498e81384cc0",
   "overlays": {
+    "io/floci/az/core/ArmRouter.java": "fb5bbb932d594224a2de22ddd5e36b325ec9db8ad85631fb633c5656c6b7aff4",
+    "io/floci/az/core/AzureRoutingFilter.java": "285fb54d708591b4900915bc64a1d32706dafa64a82c983186759be65a555c23",
+    "io/floci/az/core/cloud/ScopeResolver.java": "60d48923761ca1ae9b09304c46481e4ee84d171e4c820522ecf477926484d0f1",
     "io/floci/az/services/blob/BlobServiceHandler.java": "739a34fb36ab4ae549f539a8481599d4a14c5f74502d6f5e7b0e1077fc43e6d1",
     "io/floci/az/services/queue/QueueServiceHandler.java": "6224329a682fe2f9001fc461dd4dbc19dadc0269eef32840c8d69475ddde4577"
   }
 }
 ```
+When bumping upstream, re-audit `StorageAuth.isInterceptedBeforeStorageTerminal` and `StorageAuth.resolvePathStyleStorageService` against any changes in `AzureRoutingFilter`, `ArmRouter`, and `ScopeResolver` before updating `overlay.lock.json`.
 `scripts/build.py` enforces this contract:
 1. Always extracts fresh from the verified upstream archive into a clean directory.
 2. Before overlaying, verifies that each listed overlay file exists upstream and matches its locked SHA-256 hash.

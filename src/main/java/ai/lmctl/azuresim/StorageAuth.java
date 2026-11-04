@@ -328,10 +328,13 @@ public class StorageAuth {
         return out.toString();
     }
 
+    private static final Pattern ESCAPED_RAW_DELIMITER = Pattern.compile("%(2f|5c|00)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ESCAPED_DELIMITER = Pattern.compile("%(2f|5c|00|3b)", Pattern.CASE_INSENSITIVE);
+
     private static String unwrapAndValidate(String path) {
         String cur = path;
         for (int depth = 0; depth < 8 && cur.contains("%"); depth++) {
-            if (cur.toLowerCase(Locale.ROOT).matches(".*%(2f|5c|00|3b).*")) return null;
+            if (ESCAPED_DELIMITER.matcher(cur).find()) return null;
             String next = decodeRelaxedOnce(cur);
             if (next == null || hasInvalidPathShape(next)) return null;
             if (next.equals(cur)) return cur;
@@ -401,7 +404,7 @@ public class StorageAuth {
     private static Target target(ContainerRequestContext r, Map<String, String> headers, URI wireUri) {
         String raw = wireUri.getRawPath();
         if (raw == null || raw.isEmpty() || !raw.startsWith("/")) return null;
-        if (raw.contains("\\") || raw.contains(";") || raw.contains("//") || raw.toLowerCase(Locale.ROOT).matches(".*%(2f|5c|00).*")) return null;
+        if (raw.contains("\\") || raw.contains(";") || raw.contains("//") || ESCAPED_RAW_DELIMITER.matcher(raw).find()) return null;
         String path = decodeOnceStrict(raw);
         if (path == null || !path.equals(wireUri.getPath()) || hasInvalidPathShape(path)) return null;
         if (r != null && r.getUriInfo() != null && r.getUriInfo().getPath() != null) {
@@ -419,7 +422,17 @@ public class StorageAuth {
                 return null;
             }
         }
-        Map<String, List<String>> q = query(wireUri.getRawQuery());
+        String rawQuery = wireUri.getRawQuery();
+        if (rawQuery != null && rawQuery.contains(";")) return null;
+        Map<String, List<String>> q = query(rawQuery);
+        // Authorize the exact parameter map that JAX-RS dispatch will see. The JAX-RS parser also treats ';'
+        // as a separator, so comparing only known selector keys would miss smuggled comp/restype parameters.
+        if (r != null && r.getUriInfo() != null && r.getUriInfo().getQueryParameters() != null) {
+            Map<String, List<String>> routerQuery = new TreeMap<>();
+            r.getUriInfo().getQueryParameters().forEach((key, values) -> routerQuery
+                .computeIfAbsent(key.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>()).addAll(values));
+            if (!routerQuery.equals(q)) return null;
+        }
         for (String key : Set.of("comp", "restype", "peekonly", "action", "resource", "snapshot")) {
             if (q.containsKey(key)) {
                 if (q.get(key).size() != 1) return null;

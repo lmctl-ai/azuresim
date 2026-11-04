@@ -96,12 +96,18 @@ including SAS/SharedKeyLite, Table, ARM, ACL operations, and TLS-specific auth.
 Unsupported routes produce permission errors after Bearer authentication; a
 SharedKey request without a recognized target produces AuthenticationFailed.
 Ambiguous paths (encoded slash/backslash, double-encoded traversal or delimiters, dot
-segments, semicolons, repeated slashes, trailing slashes) are rejected in enforce mode
-to prevent policy alias bypasses. Path-style service selection (`blob` vs `queue`) mirrors
-the upstream router's exact resolution on the decoded path (including `/messages`,
+segments, semicolons, repeated slashes, trailing slashes) and ambiguous query strings
+(raw `;` separators or any mismatch with the router's parsed query map) are rejected in
+enforce mode to prevent policy alias and selector-smuggling bypasses. Literal escape-like
+keys whose decoded text forms a secondary escape of a delimiter or reserved path (such as
+raw `%252F` / literal `%2F` or raw `%256dessages` / literal `%6dessages`) are
+conservatively rejected. Path-style service selection (`blob` vs `queue`) mirrors the
+upstream router's exact resolution on the decoded path (including `/messages`,
 `restype=queue`, `x-ms-queue-message-count`, and `x-ms-blob-type` override) and fails
-closed when a request would be intercepted by a non-storage route. These are deliberate
-compatibility limits. Open mode retains upstream
+closed when a request would be intercepted by a non-storage route; consequently, in
+path-style enforce mode, `GET`/`HEAD` of a blob key containing `/messages` (e.g.
+`dir/messages.txt`) routes to queue unless `x-ms-blob-type` is sent or host-style
+addressing is used. These are deliberate compatibility limits. Open mode retains upstream
 behavior. Payload-integrity checks beyond SharedKey's signed headers remain the
 responsibility of the upstream storage handlers.
 

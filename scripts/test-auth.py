@@ -59,6 +59,8 @@ with server({**base_config, 'accounts':{ACCOUNT:KEY,'otheraccount':KEY}}) as bas
         '/'+ACCOUNT+'/allowed%252fescape/file',
         '/'+ACCOUNT+'/allowed/a%255cb',
         '/'+ACCOUNT+'/allowed/%25252e%25252e/allowed/file',
+        '/'+ACCOUNT+'/allowed/x%E2%80%A8%252Fy',
+        '/'+ACCOUNT+'/allowed/x%C2%85%252Fy',
     ]
     for path in traversal_and_double_encoded:
         request(base, 'GET', path, auth='bearer', status=403, error='AuthorizationPermissionMismatch')
@@ -111,17 +113,22 @@ with server({**base_config, 'Statement':[]}) as base:
 # service and resource that AzureRoutingFilter dispatches to.
 cross_service_config = {
     'accounts': {ACCOUNT: KEY},
-    'tokens': {TOKEN: 'alice', 'bob-queue-token': 'bob'},
+    'tokens': {TOKEN: 'alice', 'bob-queue-token': 'bob', 'carol-token': 'carol', 'dave-token': 'dave'},
     'Statement': [
         {'Effect': 'Allow', 'ActionGlob': '*', 'ResourceGlob': '/*', 'Principal': ACCOUNT},
         {'Effect': 'Allow', 'ActionGlob': BLOB + '/blobs/read', 'ResourceGlob': '/' + ACCOUNT + '/blob/allowed*', 'Principal': 'alice'},
         {'Effect': 'Deny', 'ActionGlob': QUEUE + '/*', 'ResourceGlob': '/' + ACCOUNT + '/queue/*', 'Principal': 'alice'},
         {'Effect': 'Allow', 'ActionGlob': QUEUE + '/*', 'ResourceGlob': '/' + ACCOUNT + '/queue/allowed*', 'Principal': 'bob'},
         {'Effect': 'Deny', 'ActionGlob': BLOB + '/*', 'ResourceGlob': '/' + ACCOUNT + '/blob/*', 'Principal': 'bob'},
+        # carol: container read only (no blob read); dave: blob write only. Both explicitly denied queue access.
+        {'Effect': 'Allow', 'Action': BLOB + '/read', 'ResourceGlob': '/' + ACCOUNT + '/blob/*', 'Principal': 'carol'},
+        {'Effect': 'Allow', 'Action': BLOB + '/blobs/write', 'ResourceGlob': '/' + ACCOUNT + '/blob/allowed*', 'Principal': 'dave'},
+        {'Effect': 'Deny', 'ActionGlob': QUEUE + '/*', 'ResourceGlob': '/' + ACCOUNT + '/queue/*', 'Principal': ['carol', 'dave']},
     ]
 }
 with server(cross_service_config) as base:
     request(base, 'PUT', container + '?restype=container', b'', status=201)
+    request(base, 'PUT', blob, b'BLOB_SECRET', headers={'x-ms-blob-type': 'BlockBlob'}, status=201)
     request(base, 'PUT', container + '/messages', b'BLOB_NAMED_MESSAGES', headers={'x-ms-blob-type': 'BlockBlob'}, status=201)
     request(base, 'PUT', queue, b'', status=201)
     request(base, 'POST', queue + '/messages', b'<QueueMessage><MessageText>DENIED_QUEUE_SECRET</MessageText></QueueMessage>', status=201)
@@ -148,6 +155,38 @@ with server(cross_service_config) as base:
         assert b'DENIED_QUEUE_SECRET' in request(base, 'GET', msg_path + '?peekonly=true', auth='Bearer bob-queue-token')
     admin_peek_after = request(base, 'GET', queue + '/messages?peekonly=true')
     assert b'DENIED_QUEUE_SECRET' in admin_peek_after and b'<DequeueCount>0</DequeueCount>' in admin_peek_after
+    # Query parser alignment: the JAX-RS parser splits on ';' as well as '&', so a smuggled selector must
+    # never reach dispatch unauthorized. An escaped %3B stays literal and is not a separator.
+    carol, dave, bob = 'Bearer carol-token', 'Bearer dave-token', 'Bearer bob-queue-token'
+    root = '/' + ACCOUNT
+    assert b'<Containers>' in request(base, 'GET', root + '?comp=list', auth=carol)
+    assert b'<Containers>' in request(base, 'GET', root + '?comp=list&x=1%3Brestype=queue', auth=carol)
+    denied = 'AuthorizationPermissionMismatch'
+    for smuggled in ['?comp=list&x=1;restype=queue', '?comp=list;restype=queue', '?comp=list&;restype=queue']:
+        request(base, 'GET', root + smuggled, auth=carol, status=403, error=denied)
+    request(base, 'GET', container + '?restype=container&comp=list', auth=carol, status=403, error=denied)
+    request(base, 'GET', container + '?restype=container&x=1;comp=list', auth=carol, status=403, error=denied)
+    request(base, 'GET', blob + '?comp=tags', auth='bearer', status=403, error=denied)
+    request(base, 'GET', blob + '?x=1;comp=tags', auth='bearer', status=403, error=denied)
+    request(base, 'PUT', blob + '?comp=lease', b'', auth=dave, headers={'x-ms-lease-action': 'acquire', 'x-ms-lease-duration': '-1'}, status=403, error=denied)
+    request(base, 'PUT', blob + '?x=1;comp=lease', b'', auth=dave, headers={'x-ms-lease-action': 'acquire', 'x-ms-lease-duration': '-1'}, status=403, error=denied)
+    request(base, 'PUT', blob + '?comp=snapshot', b'', auth=dave, status=403, error=denied)
+    request(base, 'PUT', blob + '?x=1;comp=snapshot', b'', auth=dave, status=403, error=denied)
+    request(base, 'GET', queue + '?comp=acl', auth=bob, status=403, error=denied)
+    request(base, 'GET', queue + '?x=1;comp=acl', auth=bob, status=403, error=denied)
+    # Admin can still overwrite blob (confirming smuggled lease did not lock the blob).
+    request(base, 'PUT', blob, b'BLOB_SECRET_2', headers={'x-ms-blob-type': 'BlockBlob'}, status=201)
+    # Encoded query key spelling reaches the same service for both layers.
+    request(base, 'GET', root + '?comp=list&%72estype=queue', auth=carol, status=403, error=denied)
+    # Host-style routing: the service comes from the host and cannot be overridden by the path or headers.
+    azure_host = {'Host': ACCOUNT + '.queue.core.windows.net'}
+    request(base, 'GET', '/allowed/messages?peekonly=true', auth='bearer', headers=azure_host, status=403, error=denied)
+    assert b'DENIED_QUEUE_SECRET' in request(base, 'GET', '/allowed/messages?peekonly=true', auth=bob, headers=azure_host)
+    # Non-storage services stay closed to storage grants.
+    for service_path in ['/' + ACCOUNT + '-table/Tables', '/' + ACCOUNT + '-cosmos/dbs', '/secrets/x', '/subscriptions', '/common/oauth2/v2.0/token']:
+        request(base, 'GET', service_path, auth=carol, status=403, error=denied)
+    admin_peek_final = request(base, 'GET', queue + '/messages?peekonly=true')
+    assert b'DENIED_QUEUE_SECRET' in admin_peek_final and b'<DequeueCount>0</DequeueCount>' in admin_peek_final
 
 with tempfile.TemporaryDirectory() as tmp:
     for value in [{}, {**base_config,'Statement':[{'Effect':'Typo','Action':'*','ResourceGlob':'*'}]},

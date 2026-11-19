@@ -1,5 +1,7 @@
 # azuresim
 
+Documentation: [Quick reference](https://www.lmctl.com/tools/azuresim/) · [LLM skill](https://www.lmctl.com/tools/azuresim/skill.html) · [Guide](https://www.lmctl.com/tools/azuresim/guide.html) · [Reference](https://www.lmctl.com/tools/azuresim/reference.html)
+
 A local Azure emulator in one native executable, built on
 [Floci-AZ](https://github.com/floci-io/floci-az) 0.15.0. Blob and Queue Storage
 run without Docker, Java, an Azure account, or network access at runtime.
